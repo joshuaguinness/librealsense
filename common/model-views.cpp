@@ -4994,6 +4994,49 @@ namespace rs2
         }
     }
 
+
+    // Generic helper functions for comparison of fw versions
+    std::vector<int> fw_version_to_int_vec(std::string fw_version)
+    {
+        int start = 0;
+        int end;
+        std::vector<int> values;
+        std::string delimiter(".");
+        std::string substr;
+        while ((end = fw_version.find(delimiter, start)) != std::string::npos)
+        {
+            substr = fw_version.substr(start, end-start);
+            start = start + substr.length() + delimiter.length();
+            values.push_back(atoi(substr.c_str()));
+        }
+        values.push_back(atoi(fw_version.substr(start, fw_version.length() - start).c_str()));
+        return values;
+    }
+
+
+    bool fw_version_less_than(std::string fw_version, std::string min_fw_version)
+    {
+        std::vector<int> curr_values = fw_version_to_int_vec(fw_version);
+        std::vector<int> min_values = fw_version_to_int_vec(min_fw_version);
+
+        for (int i = 0; i < curr_values.size(); i++)
+        {
+            if (i >= min_values.size())
+            {
+                return false;
+            }
+            if (curr_values[i] < min_values[i])
+            {
+                return true;
+            }
+            if (curr_values[i] > min_values[i])
+            {
+                return false;
+            }
+        }
+        return false;
+    }
+
     float device_model::draw_preset_panel(float panel_width,
         ux_window& window,
         std::string& error_message,
@@ -5271,6 +5314,7 @@ namespace rs2
         return panel_height;
     }
 
+
     void device_model::draw_controls(float panel_width, float panel_height,
         ux_window& window,
         std::string& error_message,
@@ -5367,7 +5411,7 @@ namespace rs2
                 ImGui::SetTooltip("%s", full_path.c_str());
             ImGui::PopFont();
         }
-        ImGui::SetCursorPos({ 0, pos.y + header_h});
+        ImGui::SetCursorPos({ 0, pos.y + header_h });
 
         ////////////////////////////////////////
         // draw device control panel
@@ -5418,32 +5462,78 @@ namespace rs2
 
         pos = ImGui::GetCursorPos();
 
+        ImVec2 rc;
+        std::string fw_version;
+        std::string min_fw_version;
+
         int info_control_panel_height = 0;
         if (show_device_info)
         {
             ImGui::PushFont(window.get_font());
             int line_h = 22;
             info_control_panel_height = (int)infos.size() * line_h + 5;
-
             for (auto&& pair : infos)
             {
-                auto rc = ImGui::GetCursorPos();
+                rc = ImGui::GetCursorPos();
                 ImGui::SetCursorPos({ rc.x + 12, rc.y + 4 });
-                ImGui::Text("%s:", pair.first.c_str()); ImGui::SameLine();
-
+                std::string info_category;
+                if (pair.first == "Recommended Firmware Version")
+                {
+                    info_category = "Min FW Version";
+                    min_fw_version = pair.second;
+                }
+                else
+                {
+                    info_category = pair.first.c_str();
+                }
+                ImGui::Text("%s:", info_category.c_str());
+                ImGui::SameLine();
                 ImGui::PushStyleColor(ImGuiCol_FrameBg, sensor_bg);
                 ImGui::PushStyleColor(ImGuiCol_TextSelectedBg, light_blue);
                 ImGui::PushStyleColor(ImGuiCol_Text, light_grey);
-                ImGui::SetCursorPos({ rc.x + 130, rc.y + 1 });
+                ImGui::SetCursorPos({ rc.x + 145, rc.y + 1 });
                 std::string label = to_string() << "##" << id << " " << pair.first;
+                if (pair.first == "Firmware Version")
+                {
+                    fw_version = pair.second;
+                    ImGui::PushItemWidth(80);
+                }
                 ImGui::InputText(label.c_str(),
                     (char*)pair.second.data(),
                     pair.second.size() + 1,
                     ImGuiInputTextFlags_AutoSelectAll | ImGuiInputTextFlags_ReadOnly);
+                if (pair.first == "Firmware Version")
+                {
+                    ImGui::PopItemWidth();
+                }
                 ImGui::PopStyleColor(3);
-
                 ImGui::SetCursorPos({ rc.x, rc.y + line_h });
             }
+
+            ImGui::SetCursorPos({ rc.x + 225, rc.y - 127 });
+
+            if (fw_version_less_than(fw_version, min_fw_version))
+            {
+                std::string label1 = to_string() << textual_icons::exclamation_triangle << "##" << id;
+                ImGui::PushStyleColor(ImGuiCol_Button, sensor_bg);
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, sensor_bg);
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, sensor_bg);
+                ImGui::PushStyleColor(ImGuiCol_Text, yellow);
+                ImGui::PushStyleColor(ImGuiCol_TextSelectedBg, yellow + 0.1f);
+
+                if (ImGui::SmallButton(label1.c_str()))
+                {
+                    open_url(recommended_fw_url);
+                }
+
+                if (ImGui::IsItemHovered())
+                {
+                    ImGui::SetTooltip("Click here to update firmware\n(internet connection required)");
+                }
+
+                ImGui::PopStyleColor(5);
+            }
+
             ImGui::PopFont();
         }
 
@@ -5482,7 +5572,7 @@ namespace rs2
 
                     if (!sub->streaming)
                     {
-                        std::string label = to_string() << "  " << textual_icons::toggle_off <<"\noff   ##" << id << "," << sub->s->get_info(RS2_CAMERA_INFO_NAME);
+                        std::string label = to_string() << "  " << textual_icons::toggle_off << "\noff   ##" << id << "," << sub->s->get_info(RS2_CAMERA_INFO_NAME);
 
                         ImGui_ScopePushStyleColor(ImGuiCol_Text, redish);
                         ImGui_ScopePushStyleColor(ImGuiCol_TextSelectedBg, redish + 0.1f);
@@ -6099,20 +6189,31 @@ namespace rs2
         ImGui::SetNextWindowPos({ float(w - 330), float(y) });
         height = lines * 30 + 20;
         ImGui::SetNextWindowSize({ float(315), float(height) });
+
+        bool opened = true;
+        bool* opened_ptr;
         std::string label;
         if (category == RS2_NOTIFICATION_CATEGORY_FIRMWARE_UPDATE_RECOMMENDED)
         {
-            label = "Firmware update recommended";
+            label = to_string() << "Firmware update recommended" << "##" << index;
+            opened_ptr = &opened;
         }
         else
         {
             label = to_string() << "Hardware Notification #" << index;
+            opened_ptr = nullptr;
         }
 
-        ImGui::Begin(label.c_str(), nullptr, flags);
-
+        ImGui::PushStyleColor(ImGuiCol_CloseButton, { 62 / 255.f, 77 / 255.f, 89 / 255.f, 1 - t });
+        ImGui::PushStyleColor(ImGuiCol_CloseButtonHovered, { 62 / 255.f + 0.1f, 77 / 255.f + 0.1f, 89 / 255.f + 0.1f, 1 - t });
+        ImGui::PushStyleColor(ImGuiCol_CloseButtonActive, { 62 / 255.f, 77 / 255.f, 89 / 255.f, 1 - t });
+        ImGui::Begin(label.c_str(), opened_ptr, flags);
+        
         if (category == RS2_NOTIFICATION_CATEGORY_FIRMWARE_UPDATE_RECOMMENDED)
         {
+            if (!opened)
+                to_close = true;
+
             std::regex version_regex("([0-9]+.[0-9]+.[0-9]+.[0-9]+\n)");
             std::smatch sm;
             std::regex_search(message, sm, version_regex);
@@ -6126,14 +6227,14 @@ namespace rs2
             ImGui::PopStyleColor();
             ImGui::Text("%s", message_suffix.c_str());
 
-            ImGui::PushStyleColor(ImGuiCol_TextSelectedBg, { 1, 1, 1, 1 });
+            ImGui::PushStyleColor(ImGuiCol_TextSelectedBg, { 1, 1, 1, 1 - t });
             ImGui::PushStyleColor(ImGuiCol_Button, { 62 / 255.f, 77 / 255.f, 89 / 255.f, 1 - t });
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, { 62 / 255.f + 0.1f, 77 / 255.f + 0.1f, 89 / 255.f + 0.1f, 1 - t });
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, { 62 / 255.f - 0.1f, 77 / 255.f - 0.1f, 89 / 255.f - 0.1f, 1 - t });
             ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 2);
-
+            std::string button_name = to_string() << "Download update" << "##" << index;
             ImGui::Indent(80);
-            if (ImGui::Button("Download update", { 130, 30 }))
+            if (ImGui::Button(button_name.c_str(), { 130, 30 }))
             {
                 open_url(recommended_fw_url);
             }
@@ -6161,7 +6262,7 @@ namespace rs2
         }
 
         ImGui::End();
-        ImGui::PopStyleColor();
+        ImGui::PopStyleColor(4);
         clear_color_scheme();
         ImGui::PopStyleVar();
     }
@@ -6195,7 +6296,7 @@ namespace rs2
                 std::end(pending_notifications),
                 [&](notification_model& n)
             {
-                return (n.get_age_in_ms() > n.get_max_lifetime_ms());
+                return (n.get_age_in_ms() > n.get_max_lifetime_ms() || n.to_close);
             }), end(pending_notifications));
 
             int idx = 0;
